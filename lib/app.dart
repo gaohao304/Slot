@@ -8,10 +8,11 @@
 // =============================================================================
 
 import 'package:flutter/material.dart';
+import 'package:hive/hive.dart';
 import 'package:provider/provider.dart';
 
+import 'providers/app_settings.dart';
 import 'providers/schedule_provider.dart';
-import 'providers/theme_provider.dart';
 import 'repositories/schedule_repository.dart';
 import 'screens/account_screen.dart';
 import 'screens/completed_screen.dart';
@@ -22,9 +23,13 @@ import 'screens/list_screen.dart';
 import 'screens/settings_screen.dart';
 import 'screens/tag_screen.dart';
 import 'screens/trash_screen.dart';
+import 'theme/slot_colors.dart';
+import 'widgets/iphone_frame.dart';
 
 class SlotApp extends StatelessWidget {
-  const SlotApp({super.key});
+  const SlotApp({super.key, required this.settingsBox});
+
+  final Box<String> settingsBox;
 
   @override
   Widget build(BuildContext context) {
@@ -40,30 +45,33 @@ class SlotApp extends StatelessWidget {
             repository: context.read<ScheduleRepository>(),
           ),
         ),
-        // 主题模式：明亮 / 深色 / 随系统
-        ChangeNotifierProvider<ThemeProvider>(
-          create: (_) => ThemeProvider(),
+        ChangeNotifierProvider<AppSettings>(
+          create: (_) => AppSettings(settingsBox),
         ),
       ],
-      child: Consumer<ThemeProvider>(
-        builder: (context, themeProvider, _) {
+      child: Consumer<AppSettings>(
+        builder: (context, settings, _) {
           return MaterialApp(
             title: 'Slot',
-            themeMode: themeProvider.mode,
-            theme: ThemeData(
-              colorScheme: ColorScheme.fromSeed(
-                seedColor: Colors.blue,
-                brightness: Brightness.light,
-              ),
-              useMaterial3: true,
-            ),
-            darkTheme: ThemeData(
-              colorScheme: ColorScheme.fromSeed(
-                seedColor: Colors.blue,
-                brightness: Brightness.dark,
-              ),
-              useMaterial3: true,
-            ),
+            debugShowCheckedModeBanner: false,
+            themeMode: settings.themeMode,
+            theme: _theme(Brightness.light),
+            darkTheme: _theme(Brightness.dark),
+            builder: (context, child) {
+              return IphoneFrame(
+                child: Builder(
+                  builder: (context) {
+                    final scale = context.watch<AppSettings>().fontScale;
+                    return MediaQuery(
+                      data: MediaQuery.of(context).copyWith(
+                        textScaler: TextScaler.linear(scale),
+                      ),
+                      child: child ?? const SizedBox.shrink(),
+                    );
+                  },
+                ),
+              );
+            },
             initialRoute: '/',
             routes: {
               '/': (context) => const HomeScreen(),
@@ -78,6 +86,25 @@ class SlotApp extends StatelessWidget {
             },
           );
         },
+      ),
+    );
+  }
+
+  ThemeData _theme(Brightness brightness) {
+    final dark = brightness == Brightness.dark;
+    return ThemeData(
+      useMaterial3: true,
+      brightness: brightness,
+      scaffoldBackgroundColor: dark ? const Color(0xFF10141C) : Colors.white,
+      colorScheme: ColorScheme.fromSeed(
+        seedColor: SlotColors.today,
+        brightness: brightness,
+      ),
+      appBarTheme: AppBarTheme(
+        backgroundColor: dark ? const Color(0xFF10141C) : Colors.white,
+        foregroundColor: dark ? Colors.white : SlotColors.ink,
+        elevation: 0,
+        scrolledUnderElevation: 0,
       ),
     );
   }

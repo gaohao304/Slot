@@ -34,5 +34,7 @@ void main() async {
   await NotificationService.instance.init();
   await NotificationService.instance.requestPermission();
 
-  runApp(const SlotApp());
+  final settingsBox = await Hive.openBox<String>('settings');
+
+  runApp(SlotApp(settingsBox: settingsBox));
 }

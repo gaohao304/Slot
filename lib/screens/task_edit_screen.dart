@@ -34,10 +34,10 @@ class _TaskEditScreenState extends State<TaskEditScreen> {
   late TextEditingController _notesController;
   DateTime? _startTime;
   int _durationMinutes = 30;
+  bool _anytime = false;
   DateTime? _deadline;
   DateTime? _reminderAt;
   List<String> _tags = [];
-  bool _isAnytime = false;
   String? _listName;
 
   @override
@@ -47,25 +47,9 @@ class _TaskEditScreenState extends State<TaskEditScreen> {
     _notesController = TextEditingController(text: widget.task.notes);
     final originalStart = widget.task.startTime;
     final originalDuration = widget.task.durationMinutes;
-
-    // 判断是否为「随时」任务：仅有日期（00:00）且持续时间为 0
-    if (originalStart != null &&
-        originalStart.hour == 0 &&
-        originalStart.minute == 0 &&
-        originalDuration == 0) {
-      _isAnytime = true;
-      _startTime = DateTime(
-        originalStart.year,
-        originalStart.month,
-        originalStart.day,
-      );
-      _durationMinutes = 0;
-    } else {
-      _isAnytime = false;
-      _startTime = originalStart;
-      _durationMinutes =
-          originalDuration == 0 ? 30 : originalDuration;
-    }
+    _anytime = originalDuration == 0;
+    _startTime = originalStart;
+    _durationMinutes = _anytime ? 30 : originalDuration;
     _deadline = widget.task.deadline;
     _reminderAt = widget.task.reminderAt;
     _tags = List.from(widget.task.tags);
@@ -116,12 +100,18 @@ class _TaskEditScreenState extends State<TaskEditScreen> {
             ),
             const SizedBox(height: 16),
             ListTile(
+              title: const Text('随时'),
+              subtitle: const Text('没有固定开始时间，出现在当天列表顶部'),
+              trailing: Switch.adaptive(
+                value: _anytime,
+                onChanged: (value) => setState(() => _anytime = value),
+              ),
+            ),
+            ListTile(
               title: const Text('计划开始时间'),
               subtitle: Text(
                 _startTime != null
-                    ? (_startTime!.hour == 0 && _startTime!.minute == 0
-                        ? DateFormat('yyyy-MM-dd').format(_startTime!)
-                        : DateFormat('yyyy-MM-dd HH:mm').format(_startTime!))
+                    ? DateFormat('yyyy-MM-dd HH:mm').format(_startTime!)
                     : '未设置',
               ),
               trailing: const Icon(Icons.chevron_right),
@@ -133,73 +123,42 @@ class _TaskEditScreenState extends State<TaskEditScreen> {
                   lastDate: DateTime(2030),
                 );
                 if (date != null && mounted) {
-                  if (_isAnytime) {
-                    // 随时任务：只记录日期，时间固定为 00:00
+                  final time = await showTimePicker(
+                    context: context,
+                    initialTime: _startTime != null
+                        ? TimeOfDay.fromDateTime(_startTime!)
+                        : TimeOfDay.now(),
+                    builder: (ctx, child) {
+                      final media = MediaQuery.of(ctx);
+                      return MediaQuery(
+                        data: media.copyWith(
+                          alwaysUse24HourFormat: true,
+                        ),
+                        child: child ?? const SizedBox.shrink(),
+                      );
+                    },
+                  );
+                  if (time != null && mounted) {
                     setState(() {
-                      _startTime =
-                          DateTime(date.year, date.month, date.day);
+                      _startTime = DateTime(
+                        date.year,
+                        date.month,
+                        date.day,
+                        time.hour,
+                        time.minute,
+                      );
                     });
-                  } else {
-                    final time = await showTimePicker(
-                      context: context,
-                      initialTime: _startTime != null
-                          ? TimeOfDay.fromDateTime(_startTime!)
-                          : TimeOfDay.now(),
-                      builder: (ctx, child) {
-                        final media = MediaQuery.of(ctx);
-                        return MediaQuery(
-                          data: media.copyWith(
-                            alwaysUse24HourFormat: true,
-                          ),
-                          child: child ?? const SizedBox.shrink(),
-                        );
-                      },
-                    );
-                    if (time != null && mounted) {
-                      setState(() {
-                        _startTime = DateTime(
-                          date.year,
-                          date.month,
-                          date.day,
-                          time.hour,
-                          time.minute,
-                        );
-                      });
-                    }
                   }
                 }
-              },
-            ),
-            SwitchListTile.adaptive(
-              title: const Text('随时（当天任意时间）'),
-              subtitle: const Text('开启时仅记录日期，任务会出现在当天列表顶部'),
-              value: _isAnytime,
-              onChanged: (value) {
-                setState(() {
-                  _isAnytime = value;
-                  if (value) {
-                    // 确保至少有一个日期
-                    final base = _startTime ?? DateTime.now();
-                    _startTime = DateTime(base.year, base.month, base.day);
-                    _durationMinutes = 0;
-                  } else {
-                    if (_durationMinutes <= 0) {
-                      _durationMinutes = 30;
-                    }
-                  }
-                });
               },
             ),
             ListTile(
               title: const Text('持续时间（分钟）'),
               subtitle: Text(
-                _isAnytime ? '随时任务无需设置' : _durationMinutes.toString(),
+                _durationMinutes.toString(),
               ),
               trailing: const Icon(Icons.chevron_right),
-              enabled: !_isAnytime,
-              onTap: _isAnytime
-                  ? null
-                  : () async {
+              onTap: () async {
                       final controller = TextEditingController(
                           text: _durationMinutes.toString());
                       final v = await showDialog<int>(
@@ -614,20 +573,12 @@ class _TaskEditScreenState extends State<TaskEditScreen> {
       );
       return;
     }
-    // 根据是否为「随时」任务整理开始时间与持续时间
-    DateTime? startTime = _startTime;
-    int durationMinutes = _durationMinutes;
-    if (_isAnytime) {
-      if (startTime != null) {
-        startTime = DateTime(startTime.year, startTime.month, startTime.day);
-      }
-      durationMinutes = 0;
-    }
-
     final task = widget.task.copyWith(
       title: title,
-      startTime: startTime,
-      durationMinutes: durationMinutes,
+      startTime: _anytime && _startTime != null
+          ? DateTime(_startTime!.year, _startTime!.month, _startTime!.day)
+          : _startTime,
+      durationMinutes: _anytime ? 0 : _durationMinutes,
       deadline: _deadline,
       reminderAt: _reminderAt,
       clearReminderAt: _reminderAt == null,

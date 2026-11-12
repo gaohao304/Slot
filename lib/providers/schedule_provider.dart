@@ -9,6 +9,7 @@
 import 'package:flutter/foundation.dart';
 
 import '../models/action.dart';
+import '../models/list_catalog.dart';
 import '../models/task.dart';
 import '../repositories/schedule_repository.dart';
 
@@ -27,6 +28,8 @@ class ScheduleProvider with ChangeNotifier {
   List<Action> _actionsForDate = [];   // 每日视图中该日的子任务
   List<String> _knownTagNames = [];
   List<String> _knownListNames = [];
+  ListCatalog _catalog = const ListCatalog();
+  bool _catalogReady = false;
   DateTime _selectedDate = DateTime.now();
 
   List<Task> get inboxTasks => _inboxTasks;
@@ -37,6 +40,7 @@ class ScheduleProvider with ChangeNotifier {
   List<Action> get actionsForDate => _actionsForDate;
   List<String> get knownTagNames => _knownTagNames;
   List<String> get knownListNames => _knownListNames;
+  ListCatalog get listCatalog => _catalog;
   DateTime get selectedDate => _selectedDate;
 
   Future<void> loadInbox() async {
@@ -105,7 +109,7 @@ class ScheduleProvider with ChangeNotifier {
   }
 
   Future<void> restoreTask(Task task) async {
-    await saveTask(task.copyWith(deletedAt: null));
+    await saveTask(task.copyWith(clearDeletedAt: true));
   }
 
   Future<void> deleteTaskPermanently(String id) async {
@@ -139,15 +143,50 @@ class ScheduleProvider with ChangeNotifier {
   }
 
   Future<void> loadKnownTagNames() async {
-    _knownTagNames = await _repository.getKnownTagNames();
+    final stored = await _repository.getKnownTagNames();
+    final extras = <String>[];
+    for (final task in [..._inboxTasks, ..._completedTasks]) {
+      for (final tag in task.tags) {
+        final name = tag.trim();
+        if (name.isEmpty || stored.contains(name) || extras.contains(name)) continue;
+        extras.add(name);
+      }
+    }
+    _knownTagNames = [...stored, ...extras];
+    if (extras.isNotEmpty) await _repository.setKnownTagNames(_knownTagNames);
     notifyListeners();
   }
 
-  Future<void> addKnownTagName(String name) async {
+  Future<void> addKnownTagName(String name, {bool atTop = false}) async {
     final trimmed = name.trim();
     if (trimmed.isEmpty) return;
     if (_knownTagNames.contains(trimmed)) return;
-    _knownTagNames = [..._knownTagNames, trimmed]..sort();
+    _knownTagNames = atTop ? [trimmed, ..._knownTagNames] : [..._knownTagNames, trimmed];
+    await _repository.setKnownTagNames(_knownTagNames);
+    notifyListeners();
+  }
+
+  /// 在最上方新建一个标签，名称默认为「新建标签」。
+  Future<String> createTag() async {
+    var name = '新建标签';
+    var index = 2;
+    while (_knownTagNames.contains(name)) {
+      name = '新建标签 $index';
+      index++;
+    }
+    await addKnownTagName(name, atTop: true);
+    return name;
+  }
+
+  Future<void> reorderTags(int oldIndex, int newIndex) async {
+    if (oldIndex < 0 || oldIndex >= _knownTagNames.length) return;
+    if (newIndex > oldIndex) newIndex -= 1;
+    if (newIndex < 0) newIndex = 0;
+    if (newIndex > _knownTagNames.length - 1) newIndex = _knownTagNames.length - 1;
+    final next = List<String>.of(_knownTagNames);
+    final name = next.removeAt(oldIndex);
+    next.insert(newIndex, name);
+    _knownTagNames = next;
     await _repository.setKnownTagNames(_knownTagNames);
     notifyListeners();
   }
@@ -168,9 +207,14 @@ class ScheduleProvider with ChangeNotifier {
       await _repository.saveTask(task.copyWith(tags: newTags));
     }
     if (_knownTagNames.contains(oldName)) {
-      _knownTagNames = _knownTagNames.where((t) => t != oldName).toList();
-      if (!_knownTagNames.contains(trimmed)) _knownTagNames.add(trimmed);
-      _knownTagNames.sort();
+      final next = List<String>.of(_knownTagNames);
+      final index = next.indexOf(oldName);
+      if (next.contains(trimmed)) {
+        next.removeAt(index);
+      } else {
+        next[index] = trimmed;
+      }
+      _knownTagNames = next;
       await _repository.setKnownTagNames(_knownTagNames);
     }
     await loadInbox();
@@ -195,29 +239,89 @@ class ScheduleProvider with ChangeNotifier {
   }
 
   Future<void> loadKnownListNames() async {
-    _knownListNames = await _repository.getKnownListNames();
+    var catalog = await _repository.getListCatalog();
+    final extras = <String>[];
+    for (final task in [..._inboxTasks, ..._completedTasks]) {
+      final name = task.listName?.trim();
+      if (name == null || name.isEmpty || catalog.contains(name) || extras.contains(name)) continue;
+      extras.add(name);
+    }
+    if (extras.isNotEmpty) {
+      catalog = catalog.copyWith(loose: [...catalog.loose, ...extras]);
+      await _repository.setListCatalog(catalog);
+    }
+    _catalog = catalog;
+    _knownListNames = catalog.allNames;
+    _catalogReady = true;
     notifyListeners();
   }
 
-  Future<void> addKnownListName(String name) async {
+  Future<void> _ensureCatalog() async {
+    if (_catalogReady) return;
+    await loadKnownListNames();
+  }
+
+  Future<void> addKnownListName(String name, {bool atTop = false}) async {
     final trimmed = name.trim();
     if (trimmed.isEmpty) return;
-    if (_knownListNames.contains(trimmed)) return;
-    _knownListNames = [..._knownListNames, trimmed]..sort();
-    await _repository.setKnownListNames(_knownListNames);
+    await _ensureCatalog();
+    if (_catalog.contains(trimmed)) return;
+    final loose = List<String>.of(_catalog.loose);
+    if (atTop) {
+      loose.insert(0, trimmed);
+    } else {
+      loose.add(trimmed);
+    }
+    _catalog = _catalog.copyWith(loose: loose);
+    await _repository.setListCatalog(_catalog);
+    _knownListNames = _catalog.allNames;
     notifyListeners();
+  }
+
+  /// 在列表最上方新建一个列表，名称默认为「新建列表」。
+  Future<String> createList() async {
+    await _ensureCatalog();
+    final name = _uniqueName('新建列表', _catalog.contains);
+    await addKnownListName(name, atTop: true);
+    return name;
+  }
+
+  /// 在已存档上方新建一个空目录，名称默认为「新建目录」。
+  Future<String> createFolder() async {
+    await _ensureCatalog();
+    final name = _uniqueName('新建目录', (candidate) => _catalog.folders.any((folder) => folder.name == candidate));
+    final folder = ListFolder(
+      id: DateTime.now().microsecondsSinceEpoch.toString(),
+      name: name,
+    );
+    _catalog = _catalog.copyWith(folders: [folder, ..._catalog.folders]);
+    await _repository.setListCatalog(_catalog);
+    notifyListeners();
+    return folder.id;
+  }
+
+  String _uniqueName(String base, bool Function(String name) taken) {
+    if (!taken(base)) return base;
+    var index = 2;
+    while (taken('$base $index')) {
+      index++;
+    }
+    return '$base $index';
   }
 
   Future<void> removeKnownListName(String name) async {
-    _knownListNames = _knownListNames.where((t) => t != name).toList();
-    await _repository.setKnownListNames(_knownListNames);
+    await _ensureCatalog();
+    _catalog = _catalog.without(name);
+    await _repository.setListCatalog(_catalog);
+    _knownListNames = _catalog.allNames;
     notifyListeners();
   }
 
-  /// 重命名列表：更新所有带该列表名的任务，并更新已知列表名称
+  /// 重命名列表：更新所有带该列表名的任务，并保持它原来的位置。
   Future<void> renameList(String oldName, String newName) async {
     final trimmed = newName.trim();
     if (trimmed.isEmpty || trimmed == oldName) return;
+    await _ensureCatalog();
     final allTasks = await _repository.getAllTasks();
     for (final task in allTasks) {
       if (task.listName == oldName) {
@@ -226,17 +330,38 @@ class ScheduleProvider with ChangeNotifier {
         );
       }
     }
-    _knownListNames = _knownListNames.where((t) => t != oldName).toList();
-    if (!_knownListNames.contains(trimmed)) {
-      _knownListNames.add(trimmed);
-      _knownListNames.sort();
-    }
-    await _repository.setKnownListNames(_knownListNames);
+    _catalog = _catalog.renameList(oldName, trimmed);
+    await _repository.setListCatalog(_catalog);
     await refreshAll();
+  }
+
+  Future<void> renameFolder(String id, String name) async {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) return;
+    await _ensureCatalog();
+    _catalog = _catalog.copyWith(
+      folders: [
+        for (final folder in _catalog.folders)
+          if (folder.id == id) folder.copyWith(name: trimmed) else folder,
+      ],
+    );
+    await _repository.setListCatalog(_catalog);
+    notifyListeners();
+  }
+
+  /// 移动列表。folderId 为空且不归档时，放回未分组列表的最上方。
+  Future<void> moveList(String name, {String? folderId, bool archive = false}) async {
+    await _ensureCatalog();
+    if (!_catalog.contains(name)) return;
+    _catalog = _catalog.place(name, folderId: folderId, archive: archive);
+    await _repository.setListCatalog(_catalog);
+    _knownListNames = _catalog.allNames;
+    notifyListeners();
   }
 
   /// 删除列表：清除所有任务上的该列表名，并从已知列表中移除
   Future<void> deleteList(String name) async {
+    await _ensureCatalog();
     final allTasks = await _repository.getAllTasks();
     for (final task in allTasks) {
       if (task.listName == name) {
@@ -245,8 +370,8 @@ class ScheduleProvider with ChangeNotifier {
         );
       }
     }
-    _knownListNames = _knownListNames.where((t) => t != name).toList();
-    await _repository.setKnownListNames(_knownListNames);
+    _catalog = _catalog.without(name);
+    await _repository.setListCatalog(_catalog);
     await refreshAll();
   }
 }

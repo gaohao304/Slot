@@ -11,6 +11,7 @@ import 'dart:convert';
 import 'package:hive_flutter/hive_flutter.dart';
 
 import '../models/action.dart';
+import '../models/list_catalog.dart';
 import '../models/task.dart';
 
 /// 日程数据仓库接口（便于后续接入云端同步）
@@ -38,6 +39,16 @@ abstract class ScheduleRepository {
 
   Future<List<String>> getKnownListNames();
   Future<void> setKnownListNames(List<String> names);
+
+  /// 列表首页的目录和归档。默认从已知列表名生成，本地仓库会单独保存。
+  Future<ListCatalog> getListCatalog() async {
+    final names = await getKnownListNames();
+    return ListCatalog(loose: names);
+  }
+
+  Future<void> setListCatalog(ListCatalog catalog) async {
+    await setKnownListNames(catalog.allNames);
+  }
 }
 
 /// 本地 Hive 实现：Task/Action 各一 Box，key 为 id，value 为 JSON 字符串
@@ -48,6 +59,7 @@ class LocalScheduleRepository implements ScheduleRepository {
   static const _knownTagsKey = 'list';
   static const _knownListsBoxName = 'known_lists';
   static const _knownListsKey = 'list';
+  static const _listCatalogKey = 'catalog';
 
   Box<String>? _tasksBox;
   Box<String>? _actionsBox;
@@ -233,5 +245,25 @@ class LocalScheduleRepository implements ScheduleRepository {
   Future<void> setKnownListNames(List<String> names) async {
     final box = await _knownLists;
     await box.put(_knownListsKey, jsonEncode(names));
+  }
+
+  @override
+  Future<ListCatalog> getListCatalog() async {
+    final box = await _knownLists;
+    final raw = box.get(_listCatalogKey);
+    if (raw != null) {
+      try {
+        return ListCatalog.decode(raw);
+      } catch (_) {}
+    }
+    final names = await getKnownListNames();
+    return ListCatalog(loose: names);
+  }
+
+  @override
+  Future<void> setListCatalog(ListCatalog catalog) async {
+    final box = await _knownLists;
+    await box.put(_listCatalogKey, catalog.encode());
+    await setKnownListNames(catalog.allNames);
   }
 }

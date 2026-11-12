@@ -22,6 +22,9 @@ class Task {
     this.notes = '',
     this.deletedAt,
     this.updatedAt,
+    this.pinned = false,
+    this.repeat = '',
+    this.anytime = false,
   });
 
   final String id;
@@ -43,6 +46,12 @@ class Task {
   /// 软删除时间，非 null 表示在垃圾箱
   final DateTime? deletedAt;
   final DateTime? updatedAt;
+  /// 锁定后，自动计划不会挪动这条任务
+  final bool pinned;
+  /// 重复规则的编码；空字符串表示不重复
+  final String repeat;
+  /// 勾选后没有固定开始钟点，即使填了持续时间
+  final bool anytime;
 
   /// 不可变拷贝；clearReminderAt: true 时显式清空 reminderAt
   Task copyWith({
@@ -60,7 +69,11 @@ class Task {
     String? userId,
     String? notes,
     DateTime? deletedAt,
+    bool clearDeletedAt = false,
     DateTime? updatedAt,
+    bool? pinned,
+    String? repeat,
+    bool? anytime,
   }) {
     return Task(
       id: id ?? this.id,
@@ -75,8 +88,11 @@ class Task {
       isCompleted: isCompleted ?? this.isCompleted,
       userId: userId ?? this.userId,
       notes: notes ?? this.notes,
-      deletedAt: deletedAt ?? this.deletedAt,
+      deletedAt: clearDeletedAt ? null : (deletedAt ?? this.deletedAt),
       updatedAt: updatedAt ?? this.updatedAt,
+      pinned: pinned ?? this.pinned,
+      repeat: repeat ?? this.repeat,
+      anytime: anytime ?? this.anytime,
     );
   }
 
@@ -97,6 +113,9 @@ class Task {
       'notes': notes,
       'deletedAt': deletedAt?.toIso8601String(),
       'updatedAt': updatedAt?.toIso8601String(),
+      'pinned': pinned,
+      'repeat': repeat,
+      'anytime': anytime,
     };
   }
 
@@ -129,6 +148,9 @@ class Task {
       updatedAt: map['updatedAt'] != null
           ? DateTime.parse(map['updatedAt'] as String)
           : null,
+      pinned: (map['pinned'] as bool?) ?? false,
+      repeat: (map['repeat'] as String?) ?? '',
+      anytime: (map['anytime'] as bool?) ?? false,
     );
   }
 }
